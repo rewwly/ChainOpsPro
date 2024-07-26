@@ -1,0 +1,123 @@
+import requests
+import json
+from web3 import Web3
+import pandas as pd
+import matplotlib.pyplot as plt
+from datetime import datetime, timedelta
+
+class ChainOpsPro:
+    def __init__(self, infura_url: str, contract_address: str = None, abi: dict = None):
+        self.web3 = Web3(Web3.HTTPProvider(infura_url))
+        self.contract = None
+        if contract_address and abi:
+            self.contract = self.web3.eth.contract(address=contract_address, abi=abi)
+        self.data = {}
+
+    def send_transaction(self, to_address: str, amount: float, private_key: str) -> str:
+        account = self.web3.eth.account.privateKeyToAccount(private_key)
+        nonce = self.web3.eth.getTransactionCount(account.address)
+        
+        txn = {
+            'to': to_address,
+            'value': self.web3.toWei(amount, 'ether'),
+            'gas': 2000000,
+            'gasPrice': self.web3.toWei('20', 'gwei'),
+            'nonce': nonce
+        }
+        signed_txn = self.web3.eth.account.signTransaction(txn, private_key=private_key)
+        tx_hash = self.web3.eth.sendRawTransaction(signed_txn.rawTransaction)
+        
+        return self.web3.toHex(tx_hash)
+
+    def interact_with_contract(self, method_name: str, *args) -> str:
+        if not self.contract:
+            return "Contract not initialized"
+        
+        txn = getattr(self.contract.functions, method_name)(*args).buildTransaction({
+            'chainId': 1,
+            'gas': 2000000,
+            'gasPrice': self.web3.toWei('20', 'gwei'),
+            'nonce': self.web3.eth.getTransactionCount(self.web3.eth.defaultAccount)
+        })
+        signed_txn = self.web3.eth.account.signTransaction(txn, private_key=self.web3.eth.defaultAccount)
+        tx_hash = self.web3.eth.sendRawTransaction(signed_txn.rawTransaction)
+        
+        return self.web3.toHex(tx_hash)
+
+    def fetch_block_data(self, block_number: int) -> dict:
+        block = self.web3.eth.getBlock(block_number, full_transactions=True)
+        return dict(block)
+
+    def fetch_transaction_data(self, tx_hash: str) -> dict:
+        tx = self.web3.eth.getTransaction(tx_hash)
+        receipt = self.web3.eth.getTransactionReceipt(tx_hash)
+        return {
+            'transaction': dict(tx),
+            'receipt': dict(receipt)
+        }
+
+    def plot_transaction_volume(self, start_date: str, end_date: str):
+        start_timestamp = int(pd.to_datetime(start_date).timestamp())
+        end_timestamp = int(pd.to_datetime(end_date).timestamp())
+        
+        transactions = []
+        for block_number in range(self.web3.eth.blockNumber - 1000, self.web3.eth.blockNumber):
+            block = self.fetch_block_data(block_number)
+            for tx in block['transactions']:
+                tx_data = self.fetch_transaction_data(tx)
+                tx_time = datetime.fromtimestamp(tx_data['transaction']['timestamp'])
+                if start_timestamp <= tx_time.timestamp() <= end_timestamp:
+                    transactions.append({
+                        'timestamp': tx_time,
+                        'value': self.web3.fromWei(tx_data['transaction']['value'], 'ether')
+                    })
+
+        df = pd.DataFrame(transactions)
+        if df.empty:
+            print("No data available to plot.")
+            return
+        
+        df.set_index('timestamp', inplace=True)
+        plt.figure(figsize=(12, 6))
+        df.resample('D').sum()['value'].plot()
+        plt.title('Daily Transaction Volume')
+        plt.xlabel('Date')
+        plt.ylabel('Transaction Volume (ETH)')
+        plt.grid(True)
+        plt.show()
+
+# Example Usage
+if __name__ == "__main__":
+    INFURA_URL = 'https://mainnet.infura.io/v3/YOUR_INFURA_PROJECT_ID'
+    CONTRACT_ADDRESS = '0xYourContractAddressHere'
+    ABI = json.loads('[...]')  # Replace with your contract ABI
+
+    chain_ops_pro = ChainOpsPro(INFURA_URL, CONTRACT_ADDRESS, ABI)
+
+    # Send Transaction
+    to_address = '0xRecipientAddressHere'
+    amount = 0.1  # Amount in ETH
+    private_key = 'YOUR_PRIVATE_KEY'
+    tx_hash = chain_ops_pro.send_transaction(to_address, amount, private_key)
+    print("Transaction Hash:", tx_hash)
+
+    # Interact with Smart Contract
+    method_name = 'methodName'  # Example method name
+    args = [arg1, arg2]  # Example arguments
+    tx_hash = chain_ops_pro.interact_with_contract(method_name, *args)
+    print("Contract Interaction Transaction Hash:", tx_hash)
+
+    # Fetch Block Data
+    block_number = 1234567  # Example block number
+    block_data = chain_ops_pro.fetch_block_data(block_number)
+    print("Block Data:", block_data)
+
+    # Fetch Transaction Data
+    tx_hash = '0xYourTransactionHashHere'
+    tx_data = chain_ops_pro.fetch_transaction_data(tx_hash)
+    print("Transaction Data:", tx_data)
+
+    # Plot Transaction Volume
+    start_date = '2024-01-01'
+    end_date = '2024-01-31'
+    chain_ops_pro.plot_transaction_volume(start_date, end_date)
